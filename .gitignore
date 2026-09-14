@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+data/
+*.part
+.DS_Store
+sess_*.zcode-session
+.codegraph

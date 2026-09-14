@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>司机轨迹坡度分析 · 单趟复盘</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<style>
+/* ===== Design Tokens(布局骨架参考 GeoLibre 桌面 GIS;主色沿用套件绿)===== */
+:root{
+  --surface:#FFFFFF; --surface-muted:#F4F6F8; --bg:#EEF1F4;
+  --text:#101828; --muted:#64748B;
+  --border:#DFE3EA; --border-strong:#C6CDD8;
+  --primary:#217346; --primary-hov:#1A5E38; --primary-press:#145030;
+  --primary-soft:#E8F5EC;
+  --climb:#DC2626; --descent:#2563EB; --flat:#64748B; --unknown:#94A3B8;
+  --radius:6px;
+  --shadow-sm:0 1px 3px rgba(16,24,40,.08); --shadow-md:0 8px 28px rgba(16,24,40,.14);
+  --t-fast:.15s cubic-bezier(.4,0,.2,1);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.55;-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;overflow:hidden}   /* GIS 应用壳:页面不滚动,面板内部滚 */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+:focus-visible{outline:2px solid var(--primary);outline-offset:1px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---- 顶栏工具条(停靠,不透明) ---- */
+header{flex:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+.tb-group{display:flex;align-items:center;gap:8px}
+.tb-sep{width:1px;height:24px;background:var(--border);margin:0 2px}
+.brand{display:flex;align-items:center;gap:9px;margin-right:4px}
+.brand h1{font-size:14.5px;font-weight:700;letter-spacing:-.2px;margin:0;white-space:nowrap}
+.brand-mark{width:30px;height:30px;border-radius:var(--radius);background:var(--primary-soft);
+  border:1px solid #D3E6DA;display:flex;align-items:center;justify-content:center}
+.field{display:flex;align-items:center;gap:6px}
+.field>span{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+.field input,.field select,.t-input{height:32px;padding:0 8px;border:1px solid var(--border-strong);border-radius:var(--radius);
+  background:var(--surface);font:inherit;font-size:12.5px;font-weight:500;color:var(--text);min-width:60px;
+  transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+.field input:hover,.field select:hover,.t-input:hover{border-color:var(--primary)}
+.field input:focus,.field select:focus,.t-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(33,115,70,.14);outline:none}
+.btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:32px;padding:0 12px;border-radius:var(--radius);font-weight:600;font-size:12.5px;line-height:1;
+  cursor:pointer;user-select:none;white-space:nowrap;border:1px solid transparent;
+  transition:background var(--t-fast),border-color var(--t-fast),box-shadow var(--t-fast),opacity var(--t-fast)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-primary:hover:not(:disabled){background:var(--primary-hov)}
+.btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border-strong)}
+.btn-ghost:hover:not(:disabled){border-color:var(--primary);background:var(--surface-muted)}
+.btn.busy::after{content:"";width:12px;height:12px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .65s linear infinite}
+.btn-ghost.busy::after{border-color:rgba(33,115,70,.3);border-top-color:var(--primary)}
+.file-btn{position:relative;overflow:hidden}
+.file-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.btn-icon{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;
+  border-radius:var(--radius);border:1px solid var(--border-strong);background:var(--surface);color:var(--muted);
+  cursor:pointer;transition:border-color var(--t-fast),color var(--t-fast),background var(--t-fast)}
+.btn-icon:hover{color:var(--primary);border-color:var(--primary);background:var(--surface-muted)}
+.chip{display:inline-flex;align-items:center;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:99px;
+  font-size:11.5px;font-weight:500;color:var(--muted);background:var(--surface-muted);max-width:240px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip.has-file{color:var(--primary-press);border-color:#CBE3D4;background:var(--primary-soft)}
+.adv{border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface)}
+.adv>summary{list-style:none;cursor:pointer;height:30px;display:flex;align-items:center;padding:0 10px;
+  font-size:12px;font-weight:600;color:var(--muted);user-select:none;white-space:nowrap}
+.adv>summary::-webkit-details-marker{display:none}
+.adv>summary::after{content:"▾";margin-left:5px}
+.adv[open]>summary::after{content:"▴"}
+.adv[open]{position:relative;z-index:1200;box-shadow:var(--shadow-md)}
+.adv .adv-body{position:absolute;left:-1px;right:-1px;top:30px;padding:10px;display:flex;gap:10px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border-strong);border-radius:0 0 var(--radius) var(--radius);box-shadow:var(--shadow-md)}
+
+/* ---- 消息条 ---- */
+#msgrow{display:flex;align-items:flex-start;gap:10px;margin:8px 14px 0;flex:none}
+#msg{flex:1;padding:8px 12px;border-radius:var(--radius);font-size:12.5px;display:none;border:1px solid;line-height:1.55}
+#msg.info{display:block;background:var(--primary-soft);color:var(--primary-press);border-color:#BBDDC8}
+#msg.warn{display:block;background:#FDF6E7;color:#8A5A00;border-color:#F2DEB2}
+#msg.err{display:block;background:#FDECEC;color:#B42318;border-color:#F5C6C6}
+#retry{flex:none;height:32px;margin-top:1px}
+
+/* DEM 补下载进度(消息条内) */
+#msg .dl-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-weight:700}
+#msg .dl-pct{font-variant-numeric:tabular-nums}
+#msg .dl-bar{height:8px;border-radius:4px;background:rgba(33,115,70,.18);overflow:hidden;margin:7px 0 6px}
+#msg .dl-fill{height:100%;width:0;background:var(--primary);border-radius:4px;transition:width .5s ease}
+#msg .dl-meta{display:flex;flex-wrap:wrap;gap:2px 16px;font-size:11.5px;font-variant-numeric:tabular-nums;opacity:.92}
+#msg .dl-fail{color:#B42318;font-weight:600}
+#msg .dl-cur{margin-top:5px;font-family:var(--mono);font-size:11px}
+#msg .dl-note{margin-top:5px;font-size:11.5px;opacity:.72}
+
+/* ---- 分析中弹窗 ---- */
+#busy{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;
+  background:rgba(23,43,34,.38);backdrop-filter:blur(1.5px)}
+#busy[hidden]{display:none}
+.busy-card{width:min(500px,calc(100vw - 44px));background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:14px;box-shadow:var(--shadow-md);padding:20px 22px 14px}
+.busy-title{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:700}
+.busy-spin{flex:none;width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(33,115,70,.22);
+  border-top-color:var(--primary);animation:busy-spin .9s linear infinite}
+@keyframes busy-spin{to{transform:rotate(360deg)}}
+.busy-sub{margin-top:7px;font-size:12.5px;color:var(--muted);line-height:1.6}
+.busy-stats{display:flex;flex-wrap:wrap;gap:3px 18px;margin:13px 0 0;font-size:12.5px;
+  font-variant-numeric:tabular-nums;color:var(--text)}
+.busy-stats b{font-weight:700}
+.busy-stats .dl-fail{color:#B42318;font-weight:600}
+.busy-bar{height:10px;border-radius:5px;background:rgba(33,115,70,.15);overflow:hidden;margin:12px 0 4px}
+.busy-fill{height:100%;width:0;background:var(--primary);border-radius:5px;transition:width .6s ease}
+.busy-bar.indet .busy-fill{width:38%;animation:busy-indet 1.15s ease-in-out infinite}
+@keyframes busy-indet{0%{margin-left:-38%}100%{margin-left:100%}}
+.busy-cur{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:8px;word-break:break-all}
+.busy-note{margin-top:13px;padding:9px 12px;border-radius:var(--radius);background:var(--primary-soft);
+  color:var(--primary-press);font-size:12px;line-height:1.7}
+.busy-foot{display:flex;justify-content:flex-end;margin-top:10px}
+.busy-hide{background:none;border:none;padding:2px 4px;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
+.busy-hide:hover{color:var(--primary-press)}
+
+/* ---- 工作区:左停靠面板 + 地图列 ---- */
+.workspace{flex:1;display:flex;min-height:0}
+#dock{width:384px;flex:none;background:var(--surface);border-right:1px solid var(--border);
+  overflow-y:auto;overscroll-behavior:contain}
+body.dock-hidden #dock{display:none}
+.dock-sec{padding:16px 18px;border-bottom:1px solid var(--border)}
+.dock-sec:empty{display:none}
+.dock-title{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;margin-bottom:11px;
+  display:flex;align-items:center;gap:7px;text-transform:uppercase}
+.dock-title::before{content:"";width:3px;height:12px;border-radius:2px;background:var(--primary)}
+
+/* ① 行程信息 */
+.trip-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+.trip-grid .field{flex-direction:column;align-items:stretch;gap:3px}
+.trip-grid .field>span{font-size:11px}
+.trip-auto{margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);font-size:12px;color:var(--muted);line-height:1.9}
+.trip-auto b{color:var(--text);font-weight:600}
+
+/* ② 核心指标 */
+.hero-value{font-size:28px;font-weight:700;letter-spacing:-.4px;margin:2px 0;font-variant-numeric:tabular-nums;line-height:1.15;color:var(--primary-press)}
+.hero-value.hero-plain{color:var(--text)}
+.hero-value small{font-size:12px;color:var(--muted);font-weight:500;margin-left:3px}
+.hero-sub{font-size:12px;color:var(--muted);margin-bottom:12px}
+.core-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.core-cell{background:var(--surface-muted);border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px}
+.core-cell .k{font-size:11px;color:var(--muted);font-weight:600;white-space:nowrap}
+.core-cell .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px}
+.q-good{color:var(--primary)} .q-mid{color:#8A5A00} .q-bad{color:#B42318}
+.ratio-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--surface-muted);border:1px solid var(--border);margin-top:12px}
+.ratio-legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:10px;font-size:12px;color:var(--muted);font-weight:500}
+.ratio-legend b{color:var(--text);font-weight:700}
+.dot{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:4px;vertical-align:-1px}
+.dot.dash{background:repeating-linear-gradient(90deg,var(--unknown) 0 4px,transparent 4px 8px)}
+
+/* ③ 摘要 */
+#sum-body{margin:0;padding-left:17px;font-size:12.5px;line-height:1.8;color:var(--text)}
+#sum-body li{margin-bottom:7px}
+#sum-body b{font-weight:700}
+#sum-body .dim{color:var(--muted)}
+
+/* 坡度分布 */
+.bar-row{display:grid;grid-template-columns:48px 1fr 60px;align-items:center;gap:8px;font-size:11.5px;margin-bottom:6px}
+.bar-row .lbl{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;font-weight:600}
+.bar-row .track{height:11px;background:var(--surface-muted);border-radius:5px;overflow:hidden;border:1px solid var(--border)}
+.bar-row .fill{height:100%;border-radius:5px;display:block}
+.bar-row .val{text-align:right;color:var(--text);font-variant-numeric:tabular-nums;font-weight:600}
+
+/* ⑤ 关键路段 */
+.seg-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;table-layout:fixed}
+.seg-table th,.seg-table td{padding:5px 6px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg-table th{color:var(--muted);font-weight:600;font-size:11px}
+.seg-table td:first-child,.seg-table th:first-child{text-align:left}
+.seg-table tbody tr{cursor:pointer}
+.seg-table tbody tr:hover td,.seg-table tbody tr.active td{background:var(--primary-soft)}
+.seg-head{font-size:11.5px;font-weight:700;color:var(--muted);margin:9px 0 4px;display:flex;align-items:center;gap:6px}
+.seg-empty{font-size:12px;color:var(--muted);padding:4px 0}
+.tri{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;display:inline-block}
+.tri.up{border-bottom:6px solid var(--climb)}
+.tri.down{border-top:6px solid var(--descent)}
+
+/* 空状态 */
+.empty{text-align:center;padding:26px 12px;color:var(--muted)}
+.empty svg{opacity:.5;margin-bottom:8px}
+.empty-title{font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px}
+.empty-steps{font-size:11.5px;line-height:1.9}
+
+/* ---- 地图列:地图 + 可停靠的剖面/明细 ---- */
+.map-col{flex:1;display:flex;flex-direction:column;min-width:0}
+#map-wrap{flex:1;position:relative;min-height:0;background:var(--surface)}
+#map{position:absolute;inset:0}
+.map-pill{position:absolute;z-index:800;background:rgba(255,255,255,.9);backdrop-filter:blur(6px);
+  border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);font-size:11.5px;padding:6px 10px}
+#legend{right:10px;bottom:10px;display:flex;gap:11px;color:var(--text);align-items:center;flex-wrap:wrap}
+#legend i{width:13px;height:4px;border-radius:2px;display:inline-block;margin-right:4px;vertical-align:middle}
+#legend i.dash{background:repeating-linear-gradient(90deg,var(--unknown) 0 4px,transparent 4px 8px)}
+#legend .lg-hint{color:var(--muted);padding-left:11px;border-left:1px solid var(--border)}
+
+.dock-panel{flex:none;background:var(--surface);border-top:1px solid var(--border);display:flex;flex-direction:column}
+.dock-panel[hidden]{display:none}
+.panel-head{flex:none;display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--border)}
+.panel-head h2{font-size:12px;margin:0;font-weight:700;color:var(--text)}
+.panel-hint{font-size:11px;color:var(--muted)}
+.panel-close{margin-left:auto}
+#profile-dock .panel-body{padding:4px 10px}
+#profile{width:100%;height:170px;display:block;cursor:crosshair}
+#details-dock .table-scroll{max-height:220px;overflow:auto;padding:0 8px}
+table{width:100%;border-collapse:collapse;font-size:11.5px;margin:6px 0;font-variant-numeric:tabular-nums}
+th,td{padding:4px 8px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:nth-child(-n+2),td:nth-child(-n+2){text-align:left}
+th{background:var(--surface-muted);position:sticky;top:0;color:var(--muted);font-weight:600;z-index:1}
+tbody tr:hover td{background:var(--surface-muted)}
+td.g-c{color:var(--climb);font-weight:600}td.g-d{color:var(--descent);font-weight:600}
+.badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:99px;font-size:10.5px;background:var(--primary-soft);
+  border:1px solid #CBE3D4;color:var(--primary-press);font-weight:600}
+.export-row{display:flex;gap:8px;align-items:center}
+.leaflet-tooltip{font-size:11.5px}
+.leaflet-control-attribution{display:none}   /* 隐藏右下角 Leaflet/底图版权角标 */
+
+/* ---- 状态栏(停靠,等宽读数) ---- */
+#statusbar{flex:none;display:flex;align-items:center;gap:14px;height:30px;padding:0 12px;
+  background:var(--surface);border-top:1px solid var(--border);font-size:11.5px;color:var(--muted)}
+#statusbar .sb-item{display:flex;align-items:center;gap:5px;white-space:nowrap}
+#statusbar .sb-item b{font-family:var(--mono);font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+#sb-spacer{flex:1}
+.sb-toggle{appearance:none;border:1px solid var(--border-strong);background:var(--surface);color:var(--muted);
+  height:22px;padding:0 9px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;
+  transition:all var(--t-fast)}
+.sb-toggle:hover{border-color:var(--primary);color:var(--primary)}
+.sb-toggle[aria-pressed="true"]{background:var(--primary-soft);border-color:#CBE3D4;color:var(--primary-press)}
+
+/* ---- 帮助弹窗 ---- */
+.modal-mask{position:fixed;inset:0;z-index:2000;background:rgba(16,24,40,.45);display:flex;
+  align-items:center;justify-content:center;padding:24px}
+.modal-mask[hidden]{display:none}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-md);
+  width:680px;max-width:100%;max-height:82vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 16px;border-bottom:1px solid var(--border);background:var(--surface-muted)}
+.modal-head h3{margin:0;font-size:14px;font-weight:700}
+.modal-body{padding:6px 18px 18px;overflow:auto;font-size:12.5px;color:var(--text);line-height:1.7}
+.modal-body h4{font-size:12.5px;color:var(--primary-press);margin:14px 0 6px;font-weight:700}
+.modal-body h4:first-child{margin-top:8px}
+.help-table{width:100%;border-collapse:collapse;font-size:12px}
+.help-table th,.help-table td{border:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top}
+.help-table th{background:var(--surface-muted);color:var(--muted);font-weight:600;white-space:nowrap;width:104px}
+
+@media (max-width:1100px){
+  body{overflow:auto}
+  .workspace{flex-direction:column}
+  #dock{width:100%;border-right:none;border-bottom:1px solid var(--border);max-height:none}
+  .map-col{min-height:560px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand tb-group">
+    <span class="brand-mark" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M2.5 18.5l5.5-9 3.8 5.9 2.7-3.6 7 6.7" stroke="#217346" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="18.5" cy="5.5" r="2.3" fill="#217346"/>
+      </svg>
+    </span>
+    <h1>司机轨迹坡度分析</h1>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <label class="btn btn-primary file-btn" title="支持 xlsx / csv,需包含「经度」「纬度」列;也可直接拖拽文件到页面">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>选择轨迹文件<input id="file" type="file" accept=".xlsx,.xls,.csv">
+    </label>
+    <span id="filename" class="chip">xlsx / csv · 需含「经度」「纬度」列 · 坐标按高德 GCJ-02 处理</span>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <div class="field"><span title="总里程与坡度的距离分母:文件累计里程列更接近真实行驶距离;GPS 折线是相邻点直线距离之和,必然偏小">里程来源</span>
+      <select id="dsrc">
+        <option value="auto" selected>里程表(优先)</option>
+        <option value="odometer">里程表(强制)</option>
+        <option value="gps">GPS 折线</option>
+      </select>
+    </div>
+    <details class="adv" id="adv">
+      <summary>高级参数</summary>
+      <div class="adv-body">
+        <div class="field"><span>坡度阈值 %</span><input id="thr" type="number" value="2" min="0.1" max="50" step="0.5"></div>
+        <div class="field"><span title="相邻点间距超过该值时按直线插入中间点采样 DEM;0 关闭">沿线加密 m</span><input id="densify" type="number" value="0" min="0" max="1000" step="10"></div>
+        <div class="field"><span title="高程序列移动平均,抑制 DEM 树冠/建筑噪声;0 关闭">平滑窗口 m</span><input id="smooth" type="number" value="150" min="0" step="10"></div>
+      </div>
+    </details>
+    <button id="run" class="btn btn-ghost" disabled>重新计算</button>
+  </div>
+  <div class="tb-sep"></div>
+  <button id="dock-toggle" class="btn btn-ghost" title="显示 / 隐藏左侧面板" aria-pressed="true">面板</button>
+  <div style="flex:1"></div>
+  <button id="help-open" class="btn-icon" title="参数与口径说明" aria-label="打开参数与口径说明">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9.2" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M9.4 9.2a2.7 2.7 0 015.1 1.2c0 1.8-2.5 2.2-2.5 3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="12" cy="17.2" r="1.05" fill="currentColor"/>
+    </svg>
+  </button>
+</header>
+<div id="msgrow" role="status">
+  <div id="msg"></div>
+  <button id="retry" class="btn btn-ghost" hidden title="重新执行本次分析;缺失的 DEM 瓦片会继续补下载,已下好的自动跳过">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M20 12a8 8 0 11-2.3-5.6M20 3v4h-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>重试
+  </button>
+</div>
+
+<!-- 分析中弹窗:解析 → DEM 补下载进度(带进度条)→ 采样计算 -->
+<div id="busy" hidden>
+  <div class="busy-card" role="dialog" aria-modal="true" aria-labelledby="busy-title">
+    <div class="busy-title"><span class="busy-spin" aria-hidden="true"></span><span id="busy-title">正在解析轨迹并检查 DEM 覆盖…</span></div>
+    <div class="busy-sub" id="busy-sub">正在读取轨迹点,并检查沿路高程数据是否已在本机。</div>
+    <div class="busy-stats" id="busy-stats" hidden></div>
+    <div class="busy-bar indet" id="busy-bar"><div class="busy-fill" id="busy-fill"></div></div>
+    <div class="busy-cur" id="busy-cur" hidden></div>
+    <div class="busy-note">首次分析新区域时,需联网下载该区域的高程数据(按 1°×1° 瓦片,每片约 20~50 MB);数据自动保存在本机,<b>之后再分析同一区域无需重复下载</b>,数秒即可出结果。</div>
+    <div class="busy-foot"><button class="busy-hide" id="busy-hide" type="button">转入后台,在页面顶部继续显示进度</button></div>
+  </div>
+</div>
+
+<div class="workspace">
+  <!-- 左侧停靠面板 -->
+  <aside id="dock">
+    <section class="dock-sec" id="sec-trip">
+      <div class="dock-title">行程信息</div>
+      <div class="trip-grid">
+        <div class="field"><span>司机</span><input class="t-input" id="t-driver" placeholder="选填"></div>
+        <div class="field"><span>车牌</span><input class="t-input" id="t-plate" placeholder="选填"></div>
+        <div class="field"><span>车型</span><input class="t-input" id="t-vehicle" placeholder="选填"></div>
+        <div class="field"><span>载重</span>
+          <select class="t-input" id="t-load"><option value="">未选择</option><option>空载</option><option>重载</option></select>
+        </div>
+        <div class="field"><span title="本趟实际消耗的燃油量。注意:单次加油量 ≠ 本趟消耗,需结合期初/期末油量或连续加满区间推算">实际耗油 L</span>
+          <input class="t-input" id="t-fuel" type="number" min="0" step="0.1" placeholder="留空 = 未接入">
+        </div>
+        <div class="field"><span>耗油来源</span>
+          <select class="t-input" id="t-fsrc"><option value="">未选择</option><option>期末加满推算</option><option>流量计</option><option>人工估算</option></select>
+        </div>
+      </div>
+      <div class="trip-auto" id="trip-auto">上传轨迹后显示起止时间、时长与数据质量。</div>
+    </section>
+    <section class="dock-sec" id="metrics">
+      <div class="dock-title">核心指标</div>
+      <div class="empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M9 4a3 3 0 100 6 3 3 0 000-6zM4.5 19c.6-3 2.3-5 4.5-5s3.9 2 4.5 5" stroke="#64748B" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M14 9h5m0 0l-2-2m2 2l-2 2M17 14l2 2m0 0h-5m5 0l-2 2" stroke="#C6CDD8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div class="empty-title">上传轨迹开始复盘</div>
+        <div class="empty-steps">选择或拖入 xlsx / csv 轨迹文件<br>可补录司机 / 车辆 / 载重 / 实际耗油</div>
+      </div>
+    </section>
+    <section class="dock-sec" id="sum-card" hidden></section>
+    <section class="dock-sec" id="dist-card" hidden></section>
+    <section class="dock-sec" id="seg-card" hidden></section>
+  </aside>
+
+  <!-- 地图列:地图 + 剖面 / 明细停靠面板 -->
+  <div class="map-col">
+    <div id="map-wrap">
+      <div id="map"></div>
+      <div id="legend" class="map-pill" aria-hidden="true">
+        <span><i style="background:#dc2626"></i>爬坡</span>
+        <span><i style="background:#2563eb"></i>下坡</span>
+        <span><i style="background:#64748b"></i>平路(±2%)</span>
+        <span><i class="dash"></i>无高程</span>
+        <span class="lg-hint">悬停路段查看详情</span>
+      </div>
+    </div>
+    <section class="dock-panel" id="profile-dock" hidden>
+      <div class="panel-head">
+        <h2>高程剖面</h2><span class="panel-hint">鼠标悬停联动地图;点击关键路段同样定位</span>
+        <button class="btn-icon panel-close" data-close="profile-dock" aria-label="关闭剖面" style="width:24px;height:24px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="panel-body"><canvas id="profile"></canvas></div>
+    </section>
+    <section class="dock-panel" id="details-dock" hidden>
+      <div class="panel-head">
+        <h2>原始轨迹明细</h2><span class="badge" id="table-count">待上传</span>
+        <div class="export-row" style="margin-left:auto">
+          <button id="report" class="btn btn-ghost" disabled style="height:26px;padding:0 9px;font-size:11.5px" title="导出单趟复盘报告:行程信息、指标汇总、数据质量、关键路段与参数,便于复核">行程报告 CSV</button>
+          <button id="export" class="btn btn-ghost" disabled style="height:26px;padding:0 9px;font-size:11.5px" title="导出全部原始轨迹点(含经纬度、高程、坡度、累计里程)">明细 CSV</button>
+        </div>
+        <button class="btn-icon panel-close" data-close="details-dock" aria-label="关闭明细" style="width:24px;height:24px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>#</th><th>时间</th><th id="th-lon">经度</th><th id="th-lat">纬度</th><th>高程 m</th><th>坡度 %</th><th>累计 km</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- 状态栏 -->
+<footer id="statusbar">
+  <span class="sb-item" id="sb-coord">高德坐标 <b>—</b></span>
+  <span class="sb-item" id="sb-stats" hidden></span>
+  <span id="sb-spacer"></span>
+  <button class="sb-toggle" id="tg-profile" aria-pressed="false">高程剖面</button>
+  <button class="sb-toggle" id="tg-details" aria-pressed="false">轨迹明细</button>
+  <button class="sb-toggle" id="tg-dock" aria-pressed="true">分析面板</button>
+</footer>
+
+<div id="help-mask" class="modal-mask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="modal-head">
+      <h3 id="help-title">参数与口径说明</h3>
+      <button id="help-close" class="btn-icon" aria-label="关闭说明">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <h4>工具栏参数</h4>
+      <table class="help-table">
+        <tr><th>坐标系</th><td>上传轨迹固定按高德 <b>GCJ-02</b> 处理(国内车队平台 / 高德导出的通用坐标,相对真实位置偏移 50~500m)。DEM 数据为 WGS-84,分析前自动转换采样;地图显示始终用高德坐标。</td></tr>
+        <tr><th>里程来源</th><td><b>里程表列</b>:按文件「里程」累计列增量计算,最接近真实行驶距离;<b>GPS 折线</b>:相邻点直线距离之和,因道路弯曲必然偏小(点距 ~500m 时约少 7%)。<b>注意加油量 ≠ 本趟消耗</b>,若用加油记录推算,需结合期初/期末油量或连续加满区间。</td></tr>
+        <tr><th>坡度阈值 %</th><td>坡度 = 相邻点高差 ÷ 距离(公路工程口径)。大于阈值计爬坡,小于 -阈值计下坡,±阈值内为「平路(±2%)」——指坡度很小,并非完全无坡。高程缺失路段单独计为「无高程」,不冒充平路。</td></tr>
+        <tr><th>沿线加密 m</th><td>相邻点间距超过该值时按<b>直线</b>插点采样 DEM。直线不是道路线形,点距公里级时会穿过道路绕开的山体、桥下水面而<b>高估</b>起伏。</td></tr>
+        <tr><th>平滑窗口 m</th><td>高程序列移动平均,抑制 DEM 树冠/建筑噪声。默认 150m,0 关闭。</td></tr>
+      </table>
+      <h4>指标口径</h4>
+      <table class="help-table">
+        <tr><th>总行驶里程</th><td>按所选里程来源累加,已剔除 &lt;1m 静止点。</td></tr>
+        <tr><th>每百公里爬升</th><td>累计爬升 ÷ 总里程 × 100,用于不同长度行程比较爬升强度。</td></tr>
+        <tr><th>最大坡度</th><td>≥100m 滑动窗口口径;DEM 为地表模型(含植被建筑),桥梁/隧道附近可能出现跳变,极值仅供参考。</td></tr>
+        <tr><th>关键路段</th><td>连续同类坡度路段按长度取前 5,点击行可在地图与剖面上定位。</td></tr>
+        <tr><th>数据质量</th><td>有效高程覆盖率、未知高程里程、≥30 分钟记录断点、平均点距。覆盖率不足或点距过稀时,指标只能作量级参考。</td></tr>
+      </table>
+      <h4>边界声明</h4>
+      <table class="help-table">
+        <tr><th>油耗</th><td>未填写实际耗油时为「线路分析模式」,不展示任何估算油耗;填写后仅做本趟汇总(总量、百公里),不做分路段油耗摊派。</td></tr>
+        <tr><th>停留</th><td>GPS 不动只能称「停留」,不代表发动机怠速,需结合车机数据判断。</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script>
+const COLORS = { c: '#dc2626', d: '#2563eb', f: '#64748b', u: '#94a3b8' };  // 地图轨迹(浅色底图)
+const UI = { c: '#DC2626', d: '#2563EB', f: '#64748B', u: '#94A3B8' };       // 界面 / 剖面
+const LABELS = { c: '爬坡', d: '下坡', f: '平路(±2%)', u: '无高程' };
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => v == null ? '-' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+// ---------- 地图 ----------
+const amapOpts = { subdomains: '1234', maxZoom: 18, attribution: '© 高德地图' };
+const road = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', amapOpts);
+const sat = L.layerGroup([
+  L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', amapOpts),
+  L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}', amapOpts),
+]);
+const esri = (path, o = {}) => L.tileLayer(
+  `https://server.arcgisonline.com/ArcGIS/rest/services/${path}/MapServer/tile/{z}/{y}/{x}`,
+  { maxZoom: 18, attribution: 'Esri · USGS · NASA', ...o });
+const terrain = L.layerGroup([
+  esri('World_Terrain_Base', { maxNativeZoom: 13 }),
+  esri('Elevation/World_Hillshade', { maxNativeZoom: 16, opacity: .55 }),
+]);   // 纯地形(高程晕渲+山体阴影),不含地名标注
+const map = L.map('map', { center: [35, 105], zoom: 4, layers: [terrain] });
+L.control.layers({ '地形(高程)': terrain, '高德路网': road, '高德卫星': sat }, null, { position: 'topright' }).addTo(map);
+L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+const trackLayer = L.layerGroup().addTo(map);
+const cursorMarker = L.circleMarker([0, 0], { radius: 9, color: '#111', weight: 2, fillColor: '#ffd60a', fillOpacity: 1 });
+
+let baseIsWgs = true;
+map.on('baselayerchange', () => { baseIsWgs = map.hasLayer(terrain); renderTrack(); });
+const toAmap = latlng => baseIsWgs ? wgs84ToGcj02(latlng.lng, latlng.lat) : [latlng.lng, latlng.lat];
+map.on('mousemove', e => {
+  const [lng, lat] = toAmap(e.latlng);
+  $('sb-coord').innerHTML = `高德坐标 <b>${lng.toFixed(6)}, ${lat.toFixed(6)}</b>`;
+});
+map.on('click', e => { const [lng, lat] = toAmap(e.latlng); L.popup().setLatLng(e.latlng)
+  .setContent(`<b>高德坐标</b><br>经度 ${lng.toFixed(6)}<br>纬度 ${lat.toFixed(6)}`).openOn(map); });
+map.on('popup open popup close', () => setTimeout(() => map.invalidateSize(), 50));
+
+function wgs84ToGcj02(lng, lat) {
+  if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lng, lat];
+  const a = 6378245.0, ee = 0.00669342162296594323, PI = Math.PI;
+  const x = lng - 105, y = lat - 35;
+  let dLat = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  dLat += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+  dLat += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
+  dLat += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
+  let dLng = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  dLng += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+  dLng += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
+  dLng += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
+  const radLat = lat / 180 * PI;
+  let magic = Math.sin(radLat); magic = 1 - ee * magic * magic;
+  const sq = Math.sqrt(magic);
+  dLat = (dLat * 180) / ((a * (1 - ee)) / (magic * sq) * PI);
+  dLng = (dLng * 180) / (a / sq * Math.cos(radLat) * PI);
+  return [lng + dLng, lat + dLat];
+}
+function gcj02ToWgs84(lng, lat) {
+  let wl = lng, wa = lat;
+  for (let k = 0; k < 5; k++) {
+    const g = wgs84ToGcj02(wl, wa);
+    wl += lng - g[0]; wa += lat - g[1];
+  }
+  return [wl, wa];
+}
+
+// ---------- 停靠面板开关(状态栏 / 工具栏) ----------
+function setPanel(id, show) {
+  $(id).hidden = !show;
+  $('tg-profile').setAttribute('aria-pressed', !$('profile-dock').hidden);
+  $('tg-details').setAttribute('aria-pressed', !$('details-dock').hidden);
+  map.invalidateSize();
+  if (lastData) drawProfile();
+}
+$('tg-profile').addEventListener('click', () => setPanel('profile-dock', $('profile-dock').hidden));
+$('tg-details').addEventListener('click', () => setPanel('details-dock', $('details-dock').hidden));
+document.querySelectorAll('.panel-close').forEach(b => b.addEventListener('click', () => setPanel(b.dataset.close, false)));
+$('dock-toggle').addEventListener('click', toggleDock);
+$('tg-dock').addEventListener('click', toggleDock);
+function toggleDock() {
+  const hidden = document.body.classList.toggle('dock-hidden');
+  $('dock-toggle').setAttribute('aria-pressed', String(!hidden));
+  $('tg-dock').setAttribute('aria-pressed', String(!hidden));
+  map.invalidateSize();
+}
+
+// ---------- 上传与计算 ----------
+let currentFile = null, lastData = null, mapLatLngs = [], wgsLatLngs = [];
+
+function setFile(f) {
+  currentFile = f;
+  $('filename').textContent = f.name;
+  $('filename').classList.add('has-file');
+  $('run').disabled = false;
+  run();
+}
+$('file').addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+$('run').addEventListener('click', run);
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer?.files?.[0];
+  if (f && /\.(xlsx|xlsm|xls|csv)$/i.test(f.name)) setFile(f);
+});
+const TRIP_FIELDS = ['t-driver', 't-plate', 't-vehicle', 't-load', 't-fuel', 't-fsrc'];
+TRIP_FIELDS.forEach(id => {
+  const el = $(id);
+  el.value = localStorage.getItem('trip.' + id) || '';
+  el.addEventListener('input', () => { localStorage.setItem('trip.' + id, el.value); if (lastData) renderCore(lastData); });
+});
+const tripVal = id => $(id).value.trim();
+
+function setMsg(type, text) { const el = $('msg'); el.className = type || ''; el.textContent = text || ''; }
+
+// ---------- 分析中弹窗(解析 → 下载进度 → 计算;可转入后台) ----------
+let bgMode = false;   // true = 弹窗已收起,进度改写到顶部消息条
+const busyEl = $('busy');
+function busyPhase(p, statsHtml, curText) {
+  if (p === 'parse') {
+    $('busy-title').textContent = '正在解析轨迹并检查 DEM 覆盖…';
+    $('busy-sub').textContent = '正在读取轨迹点,并检查沿路高程数据是否已在本机。';
+  } else if (p === 'download') {
+    $('busy-title').textContent = '正在下载 DEM 高程数据(首次)';
+    $('busy-sub').textContent = '该区域高程数据不在本机,正在从公开数据源(Copernicus 30m)补下载。';
+  } else {
+    $('busy-title').textContent = '数据就绪,正在采样高程并计算…';
+    $('busy-sub').textContent = '';
+  }
+  const det = p === 'download';
+  $('busy-bar').classList.toggle('indet', !det);
+  $('busy-stats').hidden = !det || !statsHtml;
+  if (det) $('busy-stats').innerHTML = statsHtml || '';
+  $('busy-cur').hidden = !det || !curText;
+  if (det && curText) $('busy-cur').textContent = '正在下载:' + curText;
+}
+function busyClose() { busyEl.hidden = true; }
+$('busy-hide').addEventListener('click', () => { busyClose(); bgMode = true; });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !busyEl.hidden) { busyClose(); bgMode = true; }   // Esc = 转入后台
+});
+
+async function run() {
+  if (!currentFile) return;
+  const btn = $('run');
+  btn.disabled = true; btn.classList.add('busy'); $('file').disabled = true;
+  $('retry').hidden = true;
+  bgMode = false;
+  $('busy-fill').style.width = '0';
+  busyPhase('parse');
+  busyEl.hidden = false;
+  setMsg(null);
+
+  // 分析请求处理期间轮询补下载进度:弹窗为主;转入后台后写到顶部消息条
+  let wasDownloading = false;
+  let prev = { bytes: 0, ts: performance.now() }, speed = 0;
+  const fmtMB = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(0) + ' MB';
+  const poll = setInterval(async () => {
+    try {
+      const s = await (await fetch('/download/status')).json();
+      if (s.active && s.total > 0) {
+        wasDownloading = true;
+        let recv = s.bytes_done || 0;
+        const dl = s.downloading || {};
+        for (const k in dl) recv += dl[k][0];
+        const now = performance.now(), dt = (now - prev.ts) / 1000;
+        if (dt >= 0.9) { speed = Math.max(0, (recv - prev.bytes) / dt); prev = { bytes: recv, ts: now }; }
+        const total = s.bytes_total || 0;
+        const pctv = total ? Math.min(100, recv / total * 100) : (s.done / s.total * 100);
+        const cur = Object.keys(dl);
+        const eta = (total > recv && speed > 65536) ? Math.round((total - recv) / speed) : 0;
+        const failNote = s.failed.length ? `<span class="dl-fail">失败 ${s.failed.length} 片: ${s.failed.join('、')}</span>` : '';
+        const stats =
+          `<span>瓦片 <b>${s.done}/${s.total}</b></span>` +
+          `<span>已下载 <b>${fmtMB(recv)}</b>${total ? ' / ' + fmtMB(total) : ''}</span>` +
+          (speed > 65536 ? `<span>${(speed / 1048576).toFixed(1)} MB/s</span>` : '') +
+          (eta ? `<span>剩余约 ${eta >= 90 ? Math.round(eta / 60) + ' 分钟' : eta + ' 秒'}</span>` : '') +
+          failNote;
+        if (!busyEl.hidden) {
+          busyPhase('download', stats, cur.join('、'));
+          $('busy-fill').style.width = pctv.toFixed(1) + '%';
+        }
+        if (bgMode) {
+          const el = $('msg');
+          el.className = 'info';
+          el.innerHTML =
+            `<div class="dl-head"><span>正在补下载 DEM 高程数据</span><span class="dl-pct">${pctv.toFixed(0)}%</span></div>` +
+            `<div class="dl-bar"><div class="dl-fill" style="width:${pctv}%"></div></div>` +
+            `<div class="dl-meta"><span>瓦片 ${s.done}/${s.total}</span>` +
+            `<span>已下载 ${fmtMB(recv)}${total ? ' / 约 ' + fmtMB(total) : ''}</span>` +
+            (speed > 65536 ? `<span>${(speed / 1048576).toFixed(1)} MB/s</span>` : '') +
+            (eta ? `<span>剩余约 ${eta >= 90 ? Math.round(eta / 60) + ' 分钟' : eta + ' 秒'}</span>` : '') +
+            failNote + `</div>` +
+            (cur.length ? `<div class="dl-cur">正在下载:${cur.join('、')}</div>` : '') +
+            `<div class="dl-note">首次分析该区域需联网补数据,每片约 20~50 MB(按经纬度 1°×1° 网格,如 N29_E115 = 北纬 29~30°、东经 115~116°);完成后同区域秒级出结果</div>`;
+        }
+      } else if (wasDownloading) {
+        wasDownloading = false;
+        if (!busyEl.hidden) busyPhase('calc');
+        if (bgMode) setMsg('info', 'DEM 数据就绪,正在采样高程并计算…');
+      }
+    } catch { /* 忽略轮询错误 */ }
+  }, 1200);
+
+  const fd = new FormData();
+  fd.append('file', currentFile);
+  fd.append('coord_system', 'gcj02');   // 车队平台导出的坐标固定为高德 GCJ-02,不再让用户选择
+  fd.append('grade_threshold', (parseFloat($('thr').value) || 2) / 100);
+  fd.append('smooth_window_m', Math.max(0, parseFloat($('smooth').value) || 0));
+  fd.append('densify_m', Math.max(0, parseFloat($('densify').value) || 0));
+  fd.append('distance_source', $('dsrc').value);
+  try {
+    const res = await fetch('/analyze/file', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+    render(data);
+    setMsg(null);
+  } catch (err) {
+    setMsg('err', '计算失败:' + err.message);
+    $('retry').hidden = false;   // 下载失败 / 网络问题时可直接重试
+  } finally {
+    clearInterval(poll);
+    busyClose();
+    btn.classList.remove('busy'); btn.disabled = false; $('file').disabled = false;
+  }
+}
+$('retry').addEventListener('click', run);
+
+const cls = (g, thr) => g == null ? 'u' : g > thr ? 'c' : g < -thr ? 'd' : 'f';
+const km = v => (v / 1000).toFixed(2);
+const pct = v => v == null ? '-' : (v * 100).toFixed(1);
+
+function render(data) {
+  lastData = data;
+  const { rows, metrics: m, grade_threshold: thr } = data;
+  const isWgs = data.coord_system === 'wgs84';
+  mapLatLngs = rows.map(r => {
+    if (!isWgs) return [r.lat, r.lon];
+    const g = wgs84ToGcj02(r.lon, r.lat); return [g[1], g[0]];
+  });
+  wgsLatLngs = rows.map(r => {
+    if (isWgs) return [r.lat, r.lon];
+    const g = gcj02ToWgs84(r.lon, r.lat); return [g[1], g[0]];
+  });
+  renderTrack();
+  map.fitBounds(L.latLngBounds(baseIsWgs ? wgsLatLngs : mapLatLngs), { padding: [30, 30] });
+  renderTripAuto(m);
+  renderCore(data);
+  renderSegments(m);
+  renderTable(data);
+  setPanel('profile-dock', true);   // 打开剖面并校正地图尺寸
+  drawProfile();
+}
+
+function renderTripAuto(m) {
+  const gaps = m.time_gaps || [];
+  $('trip-auto').innerHTML =
+    `起止 <b>${m.time_start || '-'}</b> → <b>${m.time_end || '-'}</b><br>` +
+    `时长 <b>${m.duration_h ?? '-'} h</b> · 停留 <b>${m.still_min ?? '-'} min</b> · ` +
+    `断点 <b>${gaps.length ? gaps.length + ' 处(最长 ' + Math.max(...gaps.map(g => g.minutes)) + ' min)' : '无'}</b>`;
+}
+
+function renderCore(data) {
+  const m = data.metrics;
+  const odo = m.distance_source === 'odometer';
+  const fuel = parseFloat(tripVal('t-fuel')) || null;
+  const l100 = fuel && m.total_distance_m ? fuel / (m.total_distance_m / 1000) * 100 : null;
+  const cov = m.elevation_coverage;
+  const gaps = (m.time_gaps || []).length;
+  const q = (cov ?? 1) >= 0.98 && gaps === 0 && (m.mean_spacing_m || 0) <= 200 ? ['良好', 'q-good']
+    : (cov ?? 1) >= 0.9 && gaps <= 1 ? ['可用', 'q-mid'] : ['需注意', 'q-bad'];
+  const tc = m.top_climbs?.[0];
+
+  $('metrics').innerHTML = `
+    <div class="dock-title">核心指标</div>
+    ${l100 != null
+      ? `<div class="hero-value">${l100.toFixed(1)}<small>L/100km</small></div>
+         <div class="hero-sub">本趟实际耗油 ${fmt(fuel, 1)} L(${tripVal('t-fsrc') || '来源未填'})· ${fmt(m.total_distance_m / 1000)} km</div>`
+      : `<div class="hero-value hero-plain">${fmt(m.total_distance_m / 1000)}<small>km</small></div>
+         <div class="hero-sub">${odo ? '里程表口径' : 'GPS 折线口径'}${odo && m.gps_chord_m ? '(GPS 折线 ' + km(m.gps_chord_m) + ' km)' : ''} · 未接入耗油数据,线路分析模式</div>`}
+    <div class="core-row">
+      <div class="core-cell"><div class="k">累计爬升</div><div class="v">${fmt(m.total_ascent_m, 0)} m</div></div>
+      <div class="core-cell"><div class="k">每百公里爬升</div><div class="v">${fmt(m.ascent_per_100km_m, 0)} m</div></div>
+      <div class="core-cell"><div class="k">数据质量</div><div class="v ${q[1]}">${q[0]}</div></div>
+    </div>
+    <div class="ratio-bar">
+      <i style="width:${pct(m.climb_ratio)}%;background:${UI.c}"></i>
+      <i style="width:${pct(m.flat_ratio)}%;background:${UI.f}"></i>
+      <i style="width:${pct(m.descent_ratio)}%;background:${UI.d}"></i>
+      ${m.unknown_ratio ? `<i style="width:${pct(m.unknown_ratio)}%;background:repeating-linear-gradient(90deg,${UI.u} 0 4px,transparent 4px 8px)"></i>` : ''}
+    </div>
+    <div class="ratio-legend">
+      <span><i class="dot" style="background:${UI.c}"></i>爬坡 <b>${pct(m.climb_ratio)}%</b></span>
+      <span><i class="dot" style="background:${UI.d}"></i>下坡 <b>${pct(m.descent_ratio)}%</b></span>
+      <span><i class="dot" style="background:${UI.f}"></i>平路(±2%)<b>${pct(m.flat_ratio)}%</b></span>
+      ${m.unknown_ratio ? `<span><i class="dot dash"></i>无高程 <b>${pct(m.unknown_ratio)}%</b></span>` : ''}
+    </div>`;
+
+  // 状态栏行程摘要
+  $('sb-stats').hidden = false;
+  $('sb-stats').innerHTML = `里程 <b>${fmt(m.total_distance_m / 1000)} km</b> · 爬升 <b>${fmt(m.total_ascent_m, 0)} m</b>` +
+    (l100 != null ? ` · <b>${l100.toFixed(1)} L/100km</b>` : '') + ` · 质量 <b>${q[0]}</b>`;
+
+  $('sum-card').hidden = false;
+  $('sum-card').innerHTML = `
+    <div class="dock-title">复盘摘要</div>
+    <ul id="sum-body">
+      <li>行程:<b>${fmt(m.total_distance_m / 1000)} km</b>,时长 <b>${m.duration_h ?? '-'} h</b>,停留 ${m.still_min ?? '-'} min;累计爬升 <b>${fmt(m.total_ascent_m, 0)} m</b>(每百公里 ${fmt(m.ascent_per_100km_m, 0)} m)。</li>
+      <li>坡度:±2% 占 <b>${pct(m.flat_ratio)}%</b>,|坡度|>4% 共 <b>${km((m.grade_hist.dist_m[0] || 0) + (m.grade_hist.dist_m[1] || 0) + (m.grade_hist.dist_m[5] || 0) + (m.grade_hist.dist_m[6] || 0))} km</b>${tc ? `;最长连续上坡 <b>${km(tc.dist_m)} km</b>(平均 ${(tc.avg_grade * 100).toFixed(1)}%,${tc.start_km} km 处)` : ''}。</li>
+      <li>${l100 != null
+        ? `油耗:本趟 <b>${fmt(fuel, 1)} L</b>,百公里 <b>${l100.toFixed(1)} L/100km</b>(${tripVal('t-fsrc') || '来源未填'});为本趟汇总,不分路段摊派。`
+        : `油耗:<span class="dim">未接入——线路分析模式,不展示估算油耗;补录上方「实际耗油」后显示。</span>`}</li>
+      <li>数据:高程覆盖 <b>${pct(cov)}%</b>${m.unknown_distance_m ? `,未知 ${km(m.unknown_distance_m)} km` : ''};点距 <b>${m.mean_spacing_m >= 1000 ? (m.mean_spacing_m / 1000).toFixed(1) + ' km' : m.mean_spacing_m + ' m'}</b>${gaps ? `,${gaps} 处断点` : ',无断点'}。</li>
+      ${(m.mean_spacing_m || 0) > 200 ? `<li class="dim">限制:点距远大于 30m DEM 分辨率,占比与极值为低估口径;精确坡度需 ≤100m 间距轨迹或道路线形。</li>` : ''}
+    </ul>`;
+
+  $('dist-card').hidden = false;
+  $('dist-card').innerHTML = `
+    <div class="dock-title">坡度分布</div>
+    ${m.grade_hist.bins.map((b, i) => {
+      const v = m.grade_hist.dist_m[i] || 0, max = Math.max(...m.grade_hist.dist_m, 1);
+      const color = i < 3 ? UI.d : i > 3 ? UI.c : UI.f;
+      return `<div class="bar-row"><span class="lbl">${b}%</span>
+        <span class="track"><span class="fill" style="width:${(v / max * 100).toFixed(1)}%;background:${color}"></span></span>
+        <span class="val">${v >= 1000 ? (v / 1000).toFixed(1) + ' km' : v.toFixed(0) + ' m'}</span></div>`;
+    }).join('')}`;
+}
+
+function renderSegments(m) {
+  const build = (runs, kind) => runs?.length
+    ? `<table class="seg-table"><thead><tr><th title="起点累计里程(km)">起点</th><th title="路段长度">长度</th><th title="高差">高差</th><th title="平均坡度">坡度</th></tr></thead><tbody>` +
+      runs.map(r => `<tr data-i0="${r.i0}" data-km="${r.start_km}" data-kind="${kind}">
+        <td>${r.start_km.toFixed(1)}</td><td>${km(r.dist_m)}</td>
+        <td>${(kind === 'c' ? '+' : '') + r.dh_m.toFixed(0)}</td><td>${(r.avg_grade * 100).toFixed(1)}%</td></tr>`).join('') + '</tbody></table>'
+    : '<div class="seg-empty">未发现符合条件的连续路段</div>';
+  $('seg-card').hidden = false;
+  $('seg-card').innerHTML = `<div class="dock-title">关键路段<span style="font-weight:500;text-transform:none;letter-spacing:0">(点击定位)</span></div>
+    <div class="seg-head"><i class="tri up"></i>连续上坡 Top 5</div>${build(m.top_climbs, 'c')}
+    <div class="seg-head"><i class="tri down"></i>连续下坡 Top 5</div>${build(m.top_descents, 'd')}`;
+  $('seg-card').querySelectorAll('tr[data-i0]').forEach(tr => tr.addEventListener('click', () => {
+    $('seg-card').querySelectorAll('tr.active').forEach(x => x.classList.remove('active'));
+    tr.classList.add('active');
+    locateRun(parseInt(tr.dataset.i0), parseFloat(tr.dataset.km));
+  }));
+}
+function locateRun(i0, startKm) {
+  if (!lastData) return;
+  const ll = (baseIsWgs ? wgsLatLngs : mapLatLngs)[i0];
+  cursorMarker.setLatLng(ll);
+  map.flyTo(ll, 12);
+  if (prof) {
+    let best = 0, bd = Infinity;
+    prof.pts.forEach((p, i) => { const dd = Math.abs(p.dist_m / 1000 - startKm); if (dd < bd) { bd = dd; best = i; } });
+    drawProfile(best);
+  }
+}
+
+function renderTable(data) {
+  const { rows, metrics: m, grade_threshold: thr } = data;
+  const label = '高德';   // 坐标固定 GCJ-02
+  $('th-lon').textContent = `经度(${label})`;
+  $('th-lat').textContent = `纬度(${label})`;
+  const MAX = 2000;
+  const origRows = rows.filter(r => !r.interp);
+  $('table-count').textContent = `${origRows.length} 点`;
+  $('tbody').innerHTML = origRows.slice(0, MAX).map(r =>
+    `<tr><td>${r.seq}</td><td>${r.time || '-'}</td><td>${r.lon.toFixed(6)}</td><td>${r.lat.toFixed(6)}</td>` +
+    `<td>${r.elev ?? '-'}</td><td class="${r.grade == null ? '' : r.grade > thr ? 'g-c' : r.grade < -thr ? 'g-d' : ''}">${r.grade == null ? '无' : (r.grade * 100).toFixed(2)}</td><td>${km(r.dist_m)}</td></tr>`
+  ).join('') + (origRows.length > MAX ? `<tr><td colspan="7">仅显示前 ${MAX} 行,共 ${origRows.length} 行</td></tr>` : '');
+  $('export').disabled = false;
+  $('report').disabled = false;
+  setPanel('details-dock', origRows.length <= 300);   // 点少直接展示,多则收起
+}
+
+function renderTrack() {
+  if (!lastData) return;
+  const { rows, grade_threshold: thr } = lastData;
+  const ll = baseIsWgs ? wgsLatLngs : mapLatLngs;
+  trackLayer.clearLayers();
+  let i = 1;
+  while (i < rows.length) {
+    const k = cls(rows[i].grade, thr);
+    let j = i;
+    while (j < rows.length && cls(rows[j].grade, thr) === k) j++;
+    const seg = ll.slice(i - 1, j);
+    const len = rows[j - 1].dist_m - rows[i - 1].dist_m;
+    const dh = (rows[j - 1].elev ?? 0) - (rows[i - 1].elev ?? 0);
+    L.polyline(seg, {
+      color: COLORS[k], weight: 5, opacity: .9,
+      dashArray: k === 'u' ? '3 8' : null,
+    }).bindTooltip(`${LABELS[k]}段 ${km(len)} km${k === 'u' ? '' : `,高差 ${dh.toFixed(0)} m,平均坡度 ${len ? (dh / len * 100).toFixed(2) : '-'} %`}`, { sticky: true })
+      .addTo(trackLayer);
+    i = j;
+  }
+  const last = rows.length - 1;
+  const origCount = rows.filter(r => !r.interp).length;
+  rows.forEach((r, idx) => {
+    const isEnd = idx === 0 || idx === last;
+    if (r.interp || (!isEnd && origCount > 3000)) return;
+    const [lat, lng] = mapLatLngs[idx];
+    L.circleMarker(ll[idx], {
+      radius: isEnd ? 7 : 3.5, color: '#fff', weight: isEnd ? 2 : 1, fillOpacity: 1,
+      fillColor: idx === 0 ? '#16a34a' : idx === last ? '#dc2626' : COLORS[cls(r.grade, thr)],
+    }).bindPopup(
+      `<b>${idx === 0 ? '起点' : idx === last ? '终点' : '第 ' + r.seq + ' 点'}</b><br>` +
+      `时间 ${r.time || '-'}<br>高德经度 ${lng.toFixed(6)}<br>高德纬度 ${lat.toFixed(6)}<br>` +
+      `高程 ${r.elev ?? '-'} m<br>坡度 ${r.grade == null ? '无数据' : (r.grade * 100).toFixed(2) + ' %'}<br>累计里程 ${km(r.dist_m)} km`
+    ).addTo(trackLayer);
+  });
+  cursorMarker.addTo(trackLayer);
+}
+
+// ---------- 高程剖面 ----------
+let prof = null;
+function drawProfile(hoverIdx = -1) {
+  const cv = $('profile');
+  if (!cv.clientWidth) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  if (!lastData) return;
+  const thr = lastData.grade_threshold;
+  const pts = lastData.rows.map((r, idx) => ({ ...r, idx })).filter(r => r.elev != null);
+  if (pts.length < 2) return;
+  const xs = pts.map(r => r.dist_m / 1000), ys = pts.map(r => r.elev);
+  const x1 = Math.max(...xs) || 1;
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const span = Math.max(y1 - y0, 10); y0 -= span * .12; y1 += span * .12;
+  if (Math.min(...ys) >= 0 && y0 < 0) y0 = 0;
+  const pad = { l: 52, r: 14, t: 10, b: 24 };
+  const X = v => pad.l + v / x1 * (W - pad.l - pad.r);
+  const Y = v => pad.t + (1 - (v - y0) / (y1 - y0)) * (H - pad.t - pad.b);
+  prof = { pts, xs, X };
+
+  ctx.font = '10.5px system-ui'; ctx.fillStyle = '#64748B'; ctx.strokeStyle = '#E4E8ED'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = y0 + (y1 - y0) * i / 4, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(Math.round(v) + ' m', pad.l - 5, y + 3);
+  }
+  const nx = Math.min(10, Math.max(2, Math.floor(W / 110)));
+  for (let i = 0; i <= nx; i++) {
+    const v = x1 * i / nx, isLast = i === nx;
+    ctx.textAlign = isLast ? 'right' : 'center';
+    ctx.fillText(v.toFixed(1) + ' km', Math.min(X(v), W - pad.r), H - 6);
+  }
+  ctx.beginPath(); ctx.moveTo(X(xs[0]), Y(y0));
+  xs.forEach((x, i) => ctx.lineTo(X(x), Y(ys[i])));
+  ctx.lineTo(X(xs[xs.length - 1]), Y(y0)); ctx.closePath();
+  ctx.fillStyle = 'rgba(33,115,70,.07)'; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  for (let i = 1; i < pts.length; i++) {
+    ctx.strokeStyle = UI[cls(pts[i].grade, thr)];
+    ctx.beginPath(); ctx.moveTo(X(xs[i - 1]), Y(ys[i - 1])); ctx.lineTo(X(xs[i]), Y(ys[i])); ctx.stroke();
+  }
+  if (hoverIdx >= 0) {
+    const r = pts[hoverIdx], x = X(xs[hoverIdx]), y = Y(ys[hoverIdx]);
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, H - pad.b); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#ffd60a'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const txt = `${xs[hoverIdx].toFixed(2)} km  ${r.elev} m  坡度 ${(r.grade * 100).toFixed(2)}%  ${r.seq != null ? '#' + r.seq : '插值点'}`;
+    ctx.font = '11.5px system-ui';
+    const tw = ctx.measureText(txt).width + 14, tx = Math.min(Math.max(x - tw / 2, pad.l), W - pad.r - tw), ty = Math.max(y - 30, pad.t);
+    ctx.fillStyle = 'rgba(16,24,40,.92)'; ctx.fillRect(tx, ty, tw, 21);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt, tx + 7, ty + 14);
+  }
+}
+
+// ---------- 弹窗 / 导出 ----------
+const helpMask = $('help-mask');
+$('help-open').addEventListener('click', () => { helpMask.hidden = false; $('help-close').focus(); });
+$('help-close').addEventListener('click', () => { helpMask.hidden = true; $('help-open').focus(); });
+helpMask.addEventListener('click', e => { if (e.target === helpMask) helpMask.hidden = true; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !helpMask.hidden) helpMask.hidden = true; });
+
+function downloadCsv(name, lines) {
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$('export').addEventListener('click', () => {
+  if (!lastData) return;
+  const label = '高德';   // 坐标固定 GCJ-02
+  const lines = [['序号', '时间', `经度(${label})`, `纬度(${label})`, '高程(m)', '坡度(%)', '累计里程(km)'].join(',')];
+  for (const r of lastData.rows) {
+    if (r.interp) continue;
+    lines.push([r.seq ?? '', r.time ?? '', r.lon.toFixed(6), r.lat.toFixed(6),
+      r.elev ?? '', r.grade == null ? '' : (r.grade * 100).toFixed(2), (r.dist_m / 1000).toFixed(3)].join(','));
+  }
+  downloadCsv((lastData.filename || '轨迹').replace(/\.(xlsx|xlsm|xls|csv)$/i, '') + '_坡度明细.csv', lines);
+});
+
+$('report').addEventListener('click', () => {
+  if (!lastData) return;
+  const m = lastData.metrics;
+  const base = (lastData.filename || '轨迹').replace(/\.(xlsx|xlsm|xls|csv)$/i, '');
+  const L2 = [];
+  const sec = (t) => L2.push('', `【${t}】`);
+  sec('行程信息');
+  [['司机', tripVal('t-driver') || '未填'], ['车牌', tripVal('t-plate') || '未填'], ['车型', tripVal('t-vehicle') || '未填'],
+   ['载重', tripVal('t-load') || '未填'], ['实际耗油(L)', tripVal('t-fuel') || '未接入'],
+   ['耗油来源', tripVal('t-fsrc') || '未填'], ['轨迹文件', lastData.filename || ''],
+   ['起止时间', `${m.time_start || '-'} ~ ${m.time_end || '-'}`], ['时长(h)', m.duration_h ?? ''],
+   ['停留(min)', m.still_min ?? '']].forEach(([k, v]) => L2.push(k + ',' + v));
+  if (tripVal('t-fuel') && m.total_distance_m) {
+    L2.push('百公里油耗(L/100km),' + (parseFloat(tripVal('t-fuel')) / (m.total_distance_m / 1000) * 100).toFixed(1));
+  }
+  sec('指标汇总');
+  [['总里程(km)', (m.total_distance_m / 1000).toFixed(2)], ['爬坡里程(km)', km(m.climb_distance_m)],
+   ['下坡里程(km)', km(m.descent_distance_m)], ['平路±2%(km)', km(m.flat_distance_m)],
+   ['无高程里程(km)', km(m.unknown_distance_m || 0)], ['累计爬升(m)', m.total_ascent_m], ['累计下降(m)', m.total_descent_m],
+   ['每百公里爬升(m)', m.ascent_per_100km_m], ['最大爬坡坡度(%)', (m.max_climb_grade * 100).toFixed(1)],
+   ['最大下坡坡度(%)', (m.max_descent_grade * 100).toFixed(1)], ['高程范围(m)', `${m.elev_min_m} ~ ${m.elev_max_m}`]].forEach(([k, v]) => L2.push(k + ',' + v));
+  sec('坡度分布(km)');
+  m.grade_hist.bins.forEach((b, i) => L2.push(`${b}%,${((m.grade_hist.dist_m[i] || 0) / 1000).toFixed(2)}`));
+  sec('数据质量');
+  [['有效高程覆盖率', pct(m.elevation_coverage) + '%'], ['未知高程里程(km)', km(m.unknown_distance_m || 0)],
+   ['平均点距(m)', m.mean_spacing_m], ['记录断点(>=30min)', (m.time_gaps || []).map(g => `${g.after_time} 后 ${g.minutes}min`).join(';') || '无'],
+   ['原始点数', m.original_point_count], ['GPS折线里程(km)', m.gps_chord_m ? km(m.gps_chord_m) : '']].forEach(([k, v]) => L2.push(k + ',' + v));
+  sec('连续上坡Top5');
+  L2.push('起点km,长度km,高差m,平均坡度%');
+  (m.top_climbs || []).forEach(r => L2.push(`${r.start_km},${km(r.dist_m)},${r.dh_m},${(r.avg_grade * 100).toFixed(1)}`));
+  sec('连续下坡Top5');
+  L2.push('起点km,长度km,高差m,平均坡度%');
+  (m.top_descents || []).forEach(r => L2.push(`${r.start_km},${km(r.dist_m)},${r.dh_m},${(r.avg_grade * 100).toFixed(1)}`));
+  sec('计算参数');
+  [['坐标系', '高德 GCJ-02'], ['里程来源', m.distance_source], ['坡度阈值', (lastData.grade_threshold * 100).toFixed(1) + '%'],
+   ['平滑窗口(m)', lastData.smooth_window_m], ['沿线加密(m)', lastData.densify_m], ['DEM', 'Copernicus GLO-30(DSM,WGS-84)']].forEach(([k, v]) => L2.push(k + ',' + v));
+  sec('边界声明');
+  L2.push('说明,未接入实际耗油时不估算油耗;加油量不等于本趟消耗;GPS停留不代表怠速;点距稀疏时坡度为低估口径');
+  downloadCsv(base + '_行程报告.csv', L2);
+});
+
+$('profile').addEventListener('mousemove', e => {
+  if (!prof) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  let best = 0, bd = Infinity;
+  prof.xs.forEach((x, i) => { const d = Math.abs(prof.X(x) - mx); if (d < bd) { bd = d; best = i; } });
+  drawProfile(best);
+  cursorMarker.setLatLng((baseIsWgs ? wgsLatLngs : mapLatLngs)[prof.pts[best].idx]);
+});
+$('profile').addEventListener('mouseleave', () => drawProfile());
+window.addEventListener('resize', () => { drawProfile(); map.invalidateSize(); });
+</script>
+</body>
+</html>
