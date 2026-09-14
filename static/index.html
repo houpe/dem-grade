@@ -470,31 +470,32 @@ const sat = L.layerGroup([
 const esri = (path, o = {}) => L.tileLayer(
   `https://server.arcgisonline.com/ArcGIS/rest/services/${path}/MapServer/tile/{z}/{y}/{x}`,
   { maxZoom: 18, attribution: 'Esri · USGS · NASA', ...o });
-const esriTerrain = L.layerGroup([
+const esriTerrainGroup = () => L.layerGroup([   // 纯 Esri 地形(高程晕渲+山体阴影),不含地名标注
   esri('World_Terrain_Base', { maxNativeZoom: 13 }),
   esri('Elevation/World_Hillshade', { maxNativeZoom: 16, opacity: .55 }),
 ]);
-// 地形底图:天地图地形晕渲(国内直连快)为主,Esri 自动兜底。
+// 地形底图:天地图地形晕渲(国内直连快)为默认,Esri 保留为可选项 + 自动兜底。
 // ter_w = Web 墨卡托,与 Leaflet 默认 CRS 一致;CGCS2000≈WGS-84,轨迹按 WGS 底图绘制不受影响
-const TDT_KEY = '4e9fa3190d7353533a03e3eac4f2ab95';
+const TDT_KEY = 'eb96eb05edbe686edd57ae93d9243e59';
 const tdtTer = L.tileLayer(
   `https://t{s}.tianditu.gov.cn/DataServer?T=ter_w&x={x}&y={y}&l={z}&tk=${TDT_KEY}`,
   { subdomains: '01234567', maxNativeZoom: 18, attribution: '天地图' });
-const terrain = L.layerGroup([tdtTer]);
-let tdtOk = false, tdtErr = 0;   // key 失效/不可达(连续 4 次瓦片失败且无一成功)时自动换 Esri
+const terrain = L.layerGroup([tdtTer]);            // 默认:天地图
+const terrainEsri = esriTerrainGroup();            // 可选:Esri 地形(兜底用独立实例,避免图层组互串)
+let tdtOk = false, tdtErr = 0;   // 天地图 key 失效/不可达(连续 4 次瓦片失败且无一成功)时自动换 Esri
 tdtTer.on('tileload', () => { tdtOk = true; });
 tdtTer.on('tileerror', () => {
   if (tdtOk) return;
-  if (++tdtErr >= 4) esriTerrain.eachLayer(l => { terrain.removeLayer(tdtTer); terrain.addLayer(l); });
+  if (++tdtErr >= 4) esriTerrainGroup().eachLayer(l => { terrain.removeLayer(tdtTer); terrain.addLayer(l); });
 });
 const map = L.map('map', { center: [35, 105], zoom: 4, layers: [terrain] });
-L.control.layers({ '地形(高程)': terrain, '高德路网': road, '高德卫星': sat }, null, { position: 'topright' }).addTo(map);
+L.control.layers({ '地形·天地图': terrain, '地形·Esri': terrainEsri, '高德路网': road, '高德卫星': sat }, null, { position: 'topright' }).addTo(map);
 L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 const trackLayer = L.layerGroup().addTo(map);
 const cursorMarker = L.circleMarker([0, 0], { radius: 9, color: '#111', weight: 2, fillColor: '#ffd60a', fillOpacity: 1 });
 
 let baseIsWgs = true;
-map.on('baselayerchange', () => { baseIsWgs = map.hasLayer(terrain); renderTrack(); });
+map.on('baselayerchange', () => { baseIsWgs = map.hasLayer(terrain) || map.hasLayer(terrainEsri); renderTrack(); });
 const toAmap = latlng => baseIsWgs ? wgs84ToGcj02(latlng.lng, latlng.lat) : [latlng.lng, latlng.lat];
 map.on('mousemove', e => {
   const [lng, lat] = toAmap(e.latlng);
