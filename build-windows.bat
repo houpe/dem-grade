@@ -37,7 +37,7 @@ if errorlevel 1 (
 )
 
 echo [2/3] Running PyInstaller - about 1-3 min...
-".venv\Scripts\pyinstaller.exe" desktop.py --name SlopeAnalysis --windowed --onedir --add-data "static;static" --collect-submodules rasterio --collect-all certifi --exclude-module tkinter
+".venv\Scripts\pyinstaller.exe" desktop.py --name SlopeAnalysis --windowed --onedir --add-data "static;static" --collect-submodules rasterio --collect-all certifi --exclude-module tkinter --icon icon.ico
 if errorlevel 1 (
   echo [ERROR] PyInstaller build failed.
   pause
