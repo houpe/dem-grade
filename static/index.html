@@ -939,8 +939,33 @@ $('help-close').addEventListener('click', () => { helpMask.hidden = true; $('hel
 helpMask.addEventListener('click', e => { if (e.target === helpMask) helpMask.hidden = true; });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !helpMask.hidden) helpMask.hidden = true; });
 
-function downloadCsv(name, lines) {
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+// 默认文件名后缀:行程起始时间(无则用当前时间),如 20260913_0800
+function tripStamp() {
+  const t = (lastData && lastData.metrics && lastData.metrics.time_start) || '';
+  let m = t.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return m[1] + m[2] + m[3] + '_' + m[4] + m[5];
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes());
+}
+
+async function downloadCsv(name, lines) {
+  const content = '\uFEFF' + lines.join('\r\n');   // BOM:Excel 直接打开不乱码
+  // ① 桌面 App:pywebview 原生保存对话框(可选位置和文件名)
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_csv) {
+    try { await window.pywebview.api.save_csv(name, content); return; } catch { /* 走兜底 */ }
+  }
+  // ② Chrome/Edge:浏览器保存对话框(suggestedName 可编辑)
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'CSV 表格', accept: { 'text/csv': ['.csv'] } }] });
+      const w = await h.createWritable(); await w.write(content); await w.close();
+      return;
+    } catch (e) { if (e && e.name === 'AbortError') return; /* 取消即结束 */ }
+  }
+  // ③ 兜底(Safari 等):直接下载到默认下载目录
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -957,7 +982,7 @@ $('export').addEventListener('click', () => {
     lines.push([r.seq ?? '', r.time ?? '', r.lon.toFixed(6), r.lat.toFixed(6),
       r.elev ?? '', r.grade == null ? '' : (r.grade * 100).toFixed(2), (r.dist_m / 1000).toFixed(3)].join(','));
   }
-  downloadCsv((lastData.filename || '轨迹').replace(/\.(xlsx|xlsm|xls|csv)$/i, '') + '_坡度明细.csv', lines);
+  downloadCsv((lastData.filename || '轨迹').replace(/\.(xlsx|xlsm|xls|csv)$/i, '') + '_坡度明细_' + tripStamp() + '.csv', lines);
 });
 
 $('report').addEventListener('click', () => {
@@ -998,7 +1023,7 @@ $('report').addEventListener('click', () => {
    ['平滑窗口(m)', lastData.smooth_window_m], ['沿线加密(m)', lastData.densify_m], ['DEM', 'Copernicus GLO-30(DSM,WGS-84)']].forEach(([k, v]) => L2.push(k + ',' + v));
   sec('边界声明');
   L2.push('说明,未接入实际耗油时不估算油耗;加油量不等于本趟消耗;GPS停留不代表怠速;点距稀疏时坡度为低估口径');
-  downloadCsv(base + '_行程报告.csv', L2);
+  downloadCsv(base + '_行程报告_' + tripStamp() + '.csv', L2);
 });
 
 $('profile').addEventListener('mousemove', e => {

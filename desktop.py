@@ -19,6 +19,33 @@ APP_NAME = "高程计算"
 PREFERRED_PORT = int(os.environ.get("SLOPE_PORT", "8107"))   # 首选端口,占用时自动顺延
 
 
+class BridgeApi:
+    """暴露给前端 JS 的原生能力,调用方式:window.pywebview.api.<方法名>(...)。"""
+
+    def save_csv(self, default_name: str, content: str) -> str:
+        """系统保存对话框(可选位置和文件名)写入 CSV;返回路径,取消/失败返回空串。
+        content 由前端拼好并自带 BOM,这里按原样落盘。"""
+        import webview
+        try:
+            win = webview.windows[0]
+            path = win.create_file_dialog(webview.SAVE_DIALOG, save_filename=default_name)
+        except Exception:
+            return ""
+        if isinstance(path, (list, tuple)):
+            path = path[0] if path else None
+        if not path:
+            return ""   # 用户取消
+        path = str(path)
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+            return path
+        except OSError:
+            return ""
+
+
 def user_data_dir() -> str:
     if sys.platform == "darwin":
         base = os.path.expanduser(f"~/Library/Application Support/{APP_NAME}")
@@ -73,6 +100,7 @@ def main() -> None:
         f"司机轨迹坡度分析 · 单趟复盘",
         f"http://127.0.0.1:{port}/",
         width=1440, height=900, min_size=(1080, 680),
+        js_api=BridgeApi(),   # 前端导出 CSV 时弹原生保存对话框
     )
     webview.start()                         # 阻塞至窗口关闭
 
