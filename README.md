@@ -2,7 +2,7 @@
 
 输入经纬度轨迹,基于本地 30m DEM 计算里程、爬坡/下坡/平路占比、累计爬升/下降、最大坡度等指标。
 
-> **部署到其他电脑(含 Windows)**:整个文件夹复制过去,双击 `启动.bat` 即可,详见[部署说明.md](部署说明.md)。
+> **部署**:桌面版(Mac .app / Windows .exe,用户免装 Python)见 [doc/桌面版打包说明.md](doc/桌面版打包说明.md);整包迁移与服务器部署见 [doc/部署说明.md](doc/部署说明.md)。
 
 ## 数据源
 
@@ -24,13 +24,20 @@
 ## 目录结构
 
 ```
-├── download_dem.py   # DEM 下载脚本(断点续传、按省过滤)
-├── server.py         # FastAPI 分析服务
-├── test_client.py    # 端到端测试示例
+├── doc/                  # 文档
+│   ├── 部署说明.md        # 整包迁移 / 服务器部署
+│   └── 桌面版打包说明.md   # Mac .app / Windows .exe 打包
+├── src/                  # 全部 Python 代码
+│   ├── server.py         # FastAPI 分析服务
+│   ├── desktop.py        # 桌面版入口(pywebview,PyInstaller 打包目标)
+│   ├── download_dem.py   # DEM 下载脚本(断点续传、按省过滤)
+│   └── test_client.py    # 端到端测试示例
+├── assets/               # 桌面版应用图标(.icns / .ico)
+├── static/               # 网页界面(含本地化 Leaflet,可离线)
 ├── requirements.txt
 └── data/
-    ├── boundaries/   # 行政边界缓存(自动生成)
-    └── dem/          # DEM 瓦片(自动生成)
+    ├── boundaries/       # 行政边界缓存(自动生成)
+    └── dem/              # DEM 瓦片(自动生成)
 ```
 
 ## 快速开始
@@ -40,16 +47,16 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
 # 1. 预览要下载的瓦片(不下载)
-.venv/bin/python download_dem.py --dry-run
+.venv/bin/python src/download_dem.py --dry-run
 
 # 2. 下载(约 15~25GB,建议 nohup 后台跑,支持断点续传,中断后重跑即可)
-nohup .venv/bin/python download_dem.py --workers 16 > download.log 2>&1 &
+nohup .venv/bin/python src/download_dem.py --workers 16 > download.log 2>&1 &
 
-# 3. 启动服务(浏览器打开 http://127.0.0.1:8107)
-.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8107
+# 3. 启动服务(浏览器打开 http://127.0.0.1:8107;Windows 把 .venv/bin 换成 .venv\Scripts)
+.venv/bin/uvicorn --app-dir src server:app --host 0.0.0.0 --port 8107
 
-# 4. 测试
-.venv/bin/python test_client.py    # 命令行端到端测试
+# 4. 测试(另开终端)
+.venv/bin/python src/test_client.py    # 命令行端到端测试
 ```
 
 ## 网页界面
@@ -65,7 +72,7 @@ nohup .venv/bin/python download_dem.py --workers 16 > download.log 2>&1 &
 浏览器打开服务地址即可,无需安装任何前端依赖(Leaflet 已本地化,可离线部署):
 
 - 上传 xlsx / csv 轨迹文件,自动按表头识别「经度 / 纬度 / 记录时间」列(兼容 lon/lng/lat/time 等命名),有时间列时自动按时间升序重排
-- 底图默认为**地形图**(Esri,含高程晕渲、山体阴影、地名,无需 key),可切换高德路网 / 高德卫星。轨迹按坡度三色着色:红=爬坡、蓝=下坡、灰=平路;悬停路段显示该段距离与平均坡度。地形图为 WGS-84、高德图为 GCJ-02,切换底图时轨迹自动按对应坐标系落图,坐标读数始终显示高德坐标
+- 底图默认为**天地图地形**,可切换 Esri 地形、高德路网 / 高德卫星。轨迹按坡度三色着色:红=爬坡、蓝=下坡、灰=平路;悬停路段显示该段距离与平均坡度。地形图为 WGS-84、高德图为 GCJ-02,切换底图时轨迹自动按对应坐标系落图,坐标读数始终显示高德坐标
 - 点击轨迹点弹窗显示该点**高德经纬度**、高程、坡度;鼠标在地图任意位置移动,左下角实时显示高德坐标
 - 右侧指标卡片:总里程、爬坡/下坡/平路里程与占比、累计爬升/下降、最大坡度、高程范围
 - 底部高程剖面图(与地图联动:悬停剖面在地图上高亮对应点)
@@ -96,7 +103,7 @@ nohup .venv/bin/python download_dem.py --workers 16 > download.log 2>&1 &
 **按需下载(默认开启)**:请求覆盖本地缺失的 DEM 瓦片时,自动从 AWS 拉取(单瓦片 20~50MB,首次分析慢几秒到几十秒)。并发请求自动去重;下载中断留下的坏文件会在下次请求时自动清理重下。要关闭:
 
 ```bash
-AUTO_DOWNLOAD=0 .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8107
+AUTO_DOWNLOAD=0 .venv/bin/uvicorn --app-dir src server:app --host 0.0.0.0 --port 8107
 ```
 
 ## API
@@ -188,7 +195,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/opt/grade-api
-ExecStart=/opt/grade-api/.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8107 --workers 4
+ExecStart=/opt/grade-api/.venv/bin/uvicorn --app-dir /opt/grade-api/src server:app --host 0.0.0.0 --port 8107 --workers 4
 Environment=AUTO_DOWNLOAD=1
 Restart=always
 

@@ -3,11 +3,11 @@
 """
 司机轨迹坡度分析服务(FastAPI + 本地 30m DEM)。
 
-启动:
-  uvicorn server:app --host 0.0.0.0 --port 8000
+启动(在 src/ 目录下执行):
+  uvicorn server:app --host 0.0.0.0 --port 8107
 
 环境变量:
-  DEM_DIR         DEM 瓦片目录(默认 ./data/dem)
+  DEM_DIR         DEM 瓦片目录(默认 <项目根>/data/dem)
   AUTO_DOWNLOAD   1 = 遇到缺失瓦片时自动从 AWS 下载(需联网)
 """
 import csv
@@ -16,6 +16,7 @@ import io
 import math
 import os
 import re
+import sys
 import threading
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -27,9 +28,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEM_DIR = os.environ.get("DEM_DIR", os.path.join(BASE_DIR, "data", "dem"))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))    # src/
+PROJECT_DIR = os.path.dirname(_SRC_DIR)                  # 仓库根(开发布局)
+# PyInstaller 冻结包里 __file__ 与打包的 static 同在 _internal/,不能上跳一层
+IS_FROZEN = getattr(sys, "frozen", False)
+DEM_DIR = os.environ.get("DEM_DIR", os.path.join(PROJECT_DIR, "data", "dem"))
+STATIC_DIR = os.path.join(_SRC_DIR if IS_FROZEN else PROJECT_DIR, "static")
 # 按需下载默认开启(数据源免费无需账号);设 AUTO_DOWNLOAD=0 显式关闭
 AUTO_DOWNLOAD = os.environ.get("AUTO_DOWNLOAD", "1") != "0"
 

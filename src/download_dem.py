@@ -29,6 +29,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 S3_BASE = "https://copernicus-dem-30m.s3.amazonaws.com"
 DATAV = "https://geo.datav.aliyun.com/areas_v3/bound/{}.json"
 CHINA_ADCODE = "100000"
+# 脚本在 src/ 下,数据目录锚定到仓库根,与运行时 cwd 无关
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BOUNDARY_CACHE = os.path.join(PROJECT_DIR, "data", "boundaries")
 
 # 中国陆地范围(瓦片网格,1°x1°)
 LAT_RANGE = range(17, 54)   # 覆盖至 53.x°N(漠河)
@@ -101,7 +104,7 @@ def tile_url(lat: int, lon: int) -> str:
 
 
 def select_tiles(only_codes=None, exclude_codes=()):
-    china = fetch_boundary(CHINA_ADCODE, "data/boundaries")
+    china = fetch_boundary(CHINA_ADCODE, BOUNDARY_CACHE)
     only_geoms = [fetch_boundary(c, "data/boundaries") for c in only_codes] if only_codes else []
     excl_geoms = [fetch_boundary(c, "data/boundaries") for c in exclude_codes]
 
@@ -152,7 +155,8 @@ def download_tile(lat: int, lon: int, out_dir: str, retries: int = 3, progress=N
 
 def main():
     ap = argparse.ArgumentParser(description="全国 30m DEM 下载器(Copernicus GLO-30)")
-    ap.add_argument("--out-dir", default="data/dem", help="DEM 存放目录(默认 data/dem)")
+    ap.add_argument("--out-dir", default=os.path.join(PROJECT_DIR, "data", "dem"),
+                    help="DEM 存放目录(默认 <项目根>/data/dem)")
     ap.add_argument("--workers", type=int, default=8, help="并发下载数(默认 8)")
     ap.add_argument("--dry-run", action="store_true", help="只统计,不下载")
     ap.add_argument(
